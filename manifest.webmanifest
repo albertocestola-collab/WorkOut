@@ -1,0 +1,16 @@
+{
+  "name": "Allenamento",
+  "short_name": "Allenamento",
+  "description": "Il tuo allenamento di oggi, un esercizio alla volta.",
+  "lang": "it",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#F4F1EE",
+  "theme_color": "#C2410C",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
