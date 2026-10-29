@@ -1156,6 +1156,9 @@ function renderAltro(){const v=$('#v-altro');const ins=insights();const lb=D.met
     +'<p class="note" style="margin:0">I dati sono salvati solo su questo dispositivo, dentro questa app. Niente account. Ogni tanto salva un backup: se cancelli i dati di Safari o cambi telefono, con il backup recuperi tutto.</p>'
     +'<p class="note" style="margin:0;'+(backupOld()?'color:var(--warn);font-weight:700':'')+'">'+(lb?'Ultimo backup: '+esc(shortDate(lb))+' ('+esc(relDay(lb).toLowerCase())+')':'Nessun backup ancora.')+'</p>'
     +'<div class="btnrow"><button class="btn primary small" data-act="backup">Salva backup</button><button class="btn small" data-act="restore">Ripristina da backup</button></div></section>';
+  h+='<section class="card stack-s"><h2 style="font-size:20px">Suoni</h2><p class="note" style="margin:0">L\'app suona a fine recupero e a fine timer. Su iPhone il volume è quello dei tasti laterali, non della suoneria.</p>'
+    +'<label class="checkline"><input type="checkbox" id="loud-snd"'+(D.meta.loudSound?' checked':'')+'><span>Suona anche con il silenzioso attivo<span class="hint">Se non senti niente, accendi questa. Mentre suona può mettere in pausa la musica di altre app.</span></span></label>'
+    +'<div class="btnrow"><button class="btn small" data-act="test-sound">Prova il suono</button></div></section>';
   h+='<section class="card stack-s"><h2 style="font-size:20px">Sicurezza</h2>'+safetyText()+'</section>';
   h+='<section class="card"><button class="btn small danger" data-act="wipe">Cancella tutti i dati di questa app</button><p class="note" style="margin-top:6px">Non tocca la Scheda della Giornata.</p></section>';
   h+='</div></div>';v.innerHTML=h}
@@ -1178,13 +1181,29 @@ let fullMode=null;
 function openFull(mode){fullMode=mode;$('#full').hidden=false;document.body.classList.add('noscroll');$('#full').scrollTop=0}
 function closeFull(){fullMode=null;$('#full').hidden=true;$('#full-in').innerHTML='';document.body.classList.remove('noscroll');releaseWake();render()}
 
-/* suono e schermo acceso: su iPhone il suono funziona solo dopo un primo tocco */
-let actx=null;
-function unlockAudio(){try{if(!actx){const C=window.AudioContext||window.webkitAudioContext;if(C)actx=new C()}if(actx&&actx.state==='suspended')actx.resume();
-  if(actx){const o=actx.createOscillator(),g=actx.createGain();g.gain.value=0.0001;o.connect(g);g.connect(actx.destination);o.start();o.stop(actx.currentTime+.02)}}catch(e){}}
-function beep(n,hi){try{if(!actx)return;const t0=actx.currentTime;for(let i=0;i<(n||1);i++){const o=actx.createOscillator(),g=actx.createGain();o.type='sine';o.frequency.value=hi?1175:880;
-  const s=t0+i*.28;g.gain.setValueAtTime(.0001,s);g.gain.exponentialRampToValueAtTime(.35,s+.02);g.gain.exponentialRampToValueAtTime(.0001,s+.22);o.connect(g);g.connect(actx.destination);o.start(s);o.stop(s+.25)}}catch(e){}
-  try{if(navigator.vibrate)navigator.vibrate(n>1?[180,90,180]:200)}catch(e){}}
+/* suono e schermo acceso. Su iPhone il suono funziona solo dopo un tocco e si "addormenta" quando non suona da un po':
+   lo risvegliamo a ogni tocco. Normalmente si mescola alla musica e tace con il silenzioso;
+   con l'opzione "anche con il silenzioso" usa la riproduzione multimediale, che suona sempre (ma può fermare la musica). */
+let actx=null;const SND={};
+const loudSnd=()=>!!D.meta.loudSound;
+function wavUrl(tones){const sr=22050;const pcm=[];tones.forEach(([f,d])=>{const n=Math.round(sr*d);for(let i=0;i<n;i++){const env=Math.min(1,i/(sr*.01))*Math.min(1,(n-i)/(sr*.04));pcm.push(f?Math.sin(2*Math.PI*f*i/sr)*env*.7:0)}});
+  const buf=new ArrayBuffer(44+pcm.length*2);const v=new DataView(buf);const w=(o,s)=>{for(let i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i))};
+  w(0,'RIFF');v.setUint32(4,36+pcm.length*2,true);w(8,'WAVE');w(12,'fmt ');v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);v.setUint32(24,sr,true);v.setUint32(28,sr*2,true);v.setUint16(32,2,true);v.setUint16(34,16,true);
+  w(36,'data');v.setUint32(40,pcm.length*2,true);pcm.forEach((s,i)=>v.setInt16(44+i*2,Math.round(s*32767),true));return URL.createObjectURL(new Blob([buf],{type:'audio/wav'}))}
+function initSnd(){if(SND.lo)return;try{SND.lo=new Audio(wavUrl([[880,.2]]));SND.hi=new Audio(wavUrl([[1175,.2]]));SND.two=new Audio(wavUrl([[1175,.18],[0,.1],[1175,.18]]));Object.values(SND).forEach(a=>{a.preload='auto'})}catch(e){}}
+function unlockAudio(){
+  try{if(navigator.audioSession)navigator.audioSession.type=loudSnd()?'playback':'auto'}catch(e){}
+  try{if(!actx){const C=window.AudioContext||window.webkitAudioContext;if(C)actx=new C()}if(actx&&actx.state!=='running')actx.resume();
+    if(actx){const o=actx.createOscillator(),g=actx.createGain();g.gain.value=0.0001;o.connect(g);g.connect(actx.destination);o.start();o.stop(actx.currentTime+.02)}}catch(e){}
+  initSnd();if(!SND.ok&&SND.lo){SND.ok=true;['lo','hi','two'].forEach(k=>{const a=SND[k];try{a.muted=true;const p=a.play();if(p)p.then(()=>{a.pause();a.currentTime=0;a.muted=false}).catch(()=>{a.muted=false})}catch(e){a.muted=false}})}}
+function beep(n,hi){const k=n>1?'two':hi?'hi':'lo';
+  if(loudSnd()||!actx){initSnd();const a=SND[k];if(a){try{a.muted=false;a.currentTime=0;const p=a.play();if(p)p.catch(()=>{})}catch(e){}}}
+  else try{if(actx.state!=='running')actx.resume();const t0=actx.currentTime+.02;for(let i=0;i<(n||1);i++){const o=actx.createOscillator(),g=actx.createGain();o.type='sine';o.frequency.value=hi?1175:880;
+    const s=t0+i*.28;g.gain.setValueAtTime(.0001,s);g.gain.exponentialRampToValueAtTime(.5,s+.02);g.gain.exponentialRampToValueAtTime(.0001,s+.22);o.connect(g);g.connect(actx.destination);o.start(s);o.stop(s+.25)}}catch(e){}
+  try{if(navigator.vibrate&&(!navigator.userActivation||navigator.userActivation.hasBeenActive))navigator.vibrate(n>1?[180,90,180]:200)}catch(e){}}
+/* ogni tocco tiene sveglio il suono */
+document.addEventListener('pointerdown',()=>{if(actx&&actx.state!=='running'){try{actx.resume()}catch(e){}}},true);
+function testSound(){unlockAudio();beep(2,true);toast('Senti due bip? Se no: alza il volume con i tasti laterali, poi prova l\'opzione "anche con il silenzioso".')}
 let wake=null;
 async function requestWake(){try{if('wakeLock' in navigator&&!wake){wake=await navigator.wakeLock.request('screen');wake.addEventListener('release',()=>{wake=null})}}catch(e){wake=null}}
 function releaseWake(){try{if(wake)wake.release()}catch(e){}wake=null}
@@ -1220,35 +1239,41 @@ function startShort(){if(D.active){resumeWorkout();return}unlockAudio();dayPains
   const A=newActive('short',ti.today?ti.today.day:null,{name:'10 minuti'});const pats=new Set();const items=[];
   (src?src.slots.filter(s=>!s.extra):[]).forEach(s=>{const ex=exById(s.ex);if(ex&&usable(ex)&&!pats.has(ex.p)&&items.length<4){pats.add(ex.p);items.push(itemFor(ex,s,{sets:2,rest:30,light:true}))}});
   if(items.length<3)[['squat','quadricipiti'],['spinta','petto'],['tirata','schiena'],['core']].forEach(([p,m])=>{if(items.length>=4||pats.has(p))return;const ex=chooseEx(p,m,new Set());if(ex){pats.add(p);items.push(itemFor(ex,{id:'',...presc(ex)},{sets:2,rest:30,light:true}))}});
-  A.items=items;A.warm=seq([['march',30],['armcirc',15],['hipcirc',15]]);A.cool=seq([['breath',40]]);A.wEnd=Date.now()+A.warm[0].sec*1000;
+  A.items=items;A.warm=seq([['march',30],['armcirc',15],['hipcirc',15]]);A.cool=seq([['breath',40]]);seqReady(A);
   D.active=A;persist();openFull('wo');requestWake();renderWO()}
 function startMobility(){if(D.active){resumeWorkout();return}unlockAudio();dayPains=[];const A=newActive('mobility',null,{name:'5 minuti di mobilità'});
-  A.warm=seq([['catcow',45],['child',40],['hipflex',50],['openbook',40],['hamstr',40],curPains().includes('piedi')?['ankle',40]:['armcirc',30],['breath',45]]);A.wEnd=Date.now()+A.warm[0].sec*1000;
+  A.warm=seq([['catcow',45],['child',40],['hipflex',50],['openbook',40],['hamstr',40],curPains().includes('piedi')?['ankle',40]:['armcirc',30],['breath',45]]);seqReady(A);
   D.active=A;persist();openFull('wo');requestWake();renderWO()}
 function resumeWorkout(){const A=D.active;if(!A)return;unlockAudio();openFull('wo');requestWake();renderWO()}
 
 /* ---------- avanzamento ---------- */
 const curItem=A=>A.items[A.i];
 function nextIdx(A,from){for(let j=from;j<A.items.length;j++){const it=A.items[j];if(!it.skipped&&it.sets.length<it.target.sets)return j}return -1}
-function enterEx(A,i){A.i=i;A.phase='ex';A.workEnd=0;const it=A.items[i];if(!it.cur)it.cur=prefill(A,it)}
+function enterEx(A,i){A.i=i;A.phase='ex';A.workEnd=0;A.workPrep=0;A.side2=false;const it=A.items[i];if(!it.cur)it.cur=prefill(A,it)}
 function goAfterSet(A){const it=curItem(A);if(it.sets.length<it.target.sets){startRest(A,it.target.rest,A.i);return}
   const n=nextIdx(A,A.i+1);if(n<0){const n0=nextIdx(A,0);if(n0>=0){startRest(A,it.target.rest,n0);return}toCool(A);return}
   startRest(A,Math.max(30,Math.min(it.target.rest,120)),n)}
 function startRest(A,sec,nextI){A.phase='rest';A.restTotal=sec*1000;A.restEnd=Date.now()+sec*1000;A.nextI=nextI;A.anchor=pick(ANCHORS);persist();renderWO()}
 function endRest(A,auto){if(auto)beep(2,true);enterEx(A,A.nextI);persist();renderWO()}
-function toCool(A){A.cool=A.kind==='full'?buildCool(A.items):A.cool;if(!A.cool.length){finishWorkout();return}A.phase='cool';A.wi=0;A.paused=false;A.wEnd=Date.now()+A.cool[0].sec*1000;persist();renderWO()}
+function toCool(A){A.cool=A.kind==='full'?buildCool(A.items):A.cool;if(!A.cool.length){finishWorkout();return}A.phase='cool';A.wi=0;seqReady(A);persist();renderWO()}
 function seqList(A){return A.phase==='cool'?A.cool:A.warm}
-function seqNext(A,auto){const L=seqList(A);if(auto)beep(1);A.wi++;A.half=false;
+/* ogni esercizio a tempo aspetta "Avvia", poi 5 secondi per mettersi in posizione, poi il timer */
+const PREP=5000;
+function seqReady(A){A.wPhase='ready';A.paused=false;A.wEnd=0;A.prepEnd=0;A.half=false;A.pip=0}
+function seqNext(A,auto){const L=seqList(A);if(auto)beep(2,true);A.wi++;
   if(A.wi>=L.length){if(A.phase==='warm'){if(A.kind==='mobility'){finishWorkout();return}const n=nextIdx(A,0);if(n<0){toCool(A);return}A.wi=0;enterEx(A,n);persist();renderWO();return}finishWorkout();return}
-  A.paused=false;A.wEnd=Date.now()+L[A.wi].sec*1000;persist();renderWO()}
+  seqReady(A);persist();renderWO()}
+function seqRun(A){const x=seqList(A)[A.wi];A.wPhase='run';A.paused=false;A.prepEnd=0;A.wEnd=Date.now()+x.sec*1000;persist();renderWO()}
+/* bip bassi agli ultimi 3 secondi di un conto alla rovescia */
+function pips(A,left){const s=Math.ceil(left/1000);if(s>=1&&s<=3&&A.pip!==s){A.pip=s;beep(1)}}
 function beginFromCheckin(A){
   const pains=curPains();A.items.forEach(it=>{const ex=exById(it.ex);if(!ex||usable(ex,pains))return;const alt=alternatives(ex,pains,1)[0];
     if(alt){it.swappedFrom=it.ex;it.ex=alt.id;it.cur=null;toast(ex.n+' → '+alt.n+', per il dolore di oggi')}else it.skipped=true});
   if(A.reduced)A.items.forEach(it=>{it.target.sets=Math.max(1,it.target.sets-(A.deload?0:1));it.light=true});
-  A.warm=buildWarm(A.items);A.wi=0;A.phase='warm';A.paused=false;A.wEnd=Date.now()+(A.warm[0]?A.warm[0].sec:0)*1000;
+  A.warm=buildWarm(A.items);A.wi=0;A.phase='warm';seqReady(A);
   if(!A.warm.length){const n=nextIdx(A,0);if(n>=0)enterEx(A,n);else toCool(A)}persist();renderWO()}
 function logSet(feel){const A=D.active;const it=curItem(A);const ex=exById(it.ex);const c=it.cur;
-  it.sets.push({w:loaded(ex)?c.w:0,r:c.r,feel,t:Date.now()});unlockAudio();
+  it.sets.push({w:loaded(ex)?c.w:0,r:c.r,feel,t:Date.now()});unlockAudio();A.workEnd=0;A.workPrep=0;A.side2=false;
   if(feel===3&&it.sets.filter(s=>s.feel===3).length===1&&it.sets.length<it.target.sets)toast('Durissimo va bene. Se serve, abbassa un po\' per la prossima serie.');
   goAfterSet(A)}
 function finishWorkout(early){const A=D.active;if(!A)return;const t=todayKey();
@@ -1275,21 +1300,25 @@ function renderWO(){const A=D.active;const box=$('#full-in');if(!A){closeFull();
   box.innerHTML=exView(A)}
 function checkinView(A){const c=A.checkin;const q=(k,label,opts)=>'<div class="qgroup"><span class="q">'+label+'</span><div class="big3">'+opts.map((o,i)=>'<button data-act="ci" data-k="'+k+'" data-v="'+(i+1)+'" aria-pressed="'+(c[k]===i+1)+'">'+o+'</button>').join('')+'</div></div>';
   let h='<div class="wtop"><button class="iconbtn" data-act="wo-cancel" aria-label="Annulla">'+IC.x+'</button><div class="mid">'+esc(A.dayName)+'</div><span style="width:44px"></span></div><div class="wbody">';
-  h+='<div><span class="phase">Prima di iniziare · 3 tocchi</span></div>'+q('sleep','Come hai dormito?',['Male','Così così','Bene'])+q('energy','Energia adesso?',['Bassa','Media','Alta'])+q('pain','Dolori oggi?',['No','Un po\'','Sì']);
+  h+='<div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><span class="phase">Prima di iniziare · 3 tocchi</span><button class="btn small ghost" data-act="test-sound">Prova il suono</button></div>'+q('sleep','Come hai dormito?',['Male','Così così','Bene'])+q('energy','Energia adesso?',['Bassa','Media','Alta'])+q('pain','Dolori oggi?',['No','Un po\'','Sì']);
   if(c.pain>=2)h+='<div class="qgroup"><span class="hint" style="font-size:15px">Dove? Per oggi tolgo gli esercizi che lo caricano.</span><div class="chips">'+PAINS.map(([k,l])=>'<button class="chip" data-act="ci-where" data-v="'+k+'" aria-pressed="'+arr(c.where).includes(k)+'">'+l+'</button>').join('')+'</div></div>';
   const ok=c.sleep&&c.energy&&c.pain;const low=c.energy===1||(c.sleep===1&&c.energy===2);
   h+='</div>';
   if(ok&&low&&!A.deload)h+='<div class="nextbox stack-s"><b>Oggi versione leggera?</b><p class="muted">Una serie in meno e pesi un po\' più leggeri. Conta come allenamento fatto, e la progressione non si perde.</p><div class="wfoot"><button class="btn" data-act="ci-go" data-light="0">No, normale</button><button class="btn primary" data-act="ci-go" data-light="1">Sì, leggera</button></div></div>';
   else h+='<div class="wfoot"><button class="btn ghost" data-act="ci-go" data-light="0">Salta</button><button class="btn primary" data-act="ci-go" data-light="0"'+(ok?'':' style="opacity:.55"')+'>Inizia il riscaldamento</button></div>';
   return h}
-function seqView(A){const L=seqList(A);const x=L[A.wi];const ex=exById(x.ex);const left=A.paused?A.wLeft:A.wEnd-Date.now();const warm=A.phase==='warm';
+function seqView(A){const L=seqList(A);const x=L[A.wi];const ex=exById(x.ex);const ph=A.wPhase||'run';const left=A.paused?A.wLeft:A.wEnd-Date.now();const warm=A.phase==='warm';
   const title=A.kind==='mobility'?'Mobilità':warm?'Riscaldamento':'Defaticamento';const nx=L[A.wi+1];
   let h=woTop(A,title+' · '+(A.wi+1)+' di '+L.length,(A.wi)/L.length)+'<div class="wbody">';
   h+='<div class="exhead"><span class="fig">'+figOf(ex)+'</span><div class="tx"><span class="phase">'+title+'</span><div class="exname" style="font-size:clamp(24px,7vw,32px)">'+esc(ex.n)+'</div>'+(perSide(ex)?'<span class="muted">Metà tempo per lato: ti avviso con un suono.</span>':'')+'</div></div>';
-  h+=ring(clamp(left/(x.sec*1000),0,1),fmtClock(left),A.paused?'in pausa':'restano',true);
+  if(ph==='ready')h+=ring(1,fmtClock(x.sec*1000),'quando vuoi, tocca Avvia',true);
+  else if(ph==='prep'){const pl=A.prepEnd-Date.now();h+=ring(clamp(pl/PREP,0,1),String(Math.max(1,Math.ceil(pl/1000))),'mettiti in posizione',false)}
+  else h+=ring(clamp(left/(x.sec*1000),0,1),fmtClock(left),A.paused?'in pausa':'restano',true);
   h+='<div class="cue"><b>Come:</b> '+esc(ex.desc)+'</div>';
   if(nx)h+='<p class="muted" style="text-align:center">Poi: <b>'+esc(exName(nx.ex))+'</b></p>';
-  h+='</div><div class="wfoot"><button class="btn" data-act="seq-pause">'+(A.paused?'Riprendi':'Pausa')+'</button><button class="btn primary" data-act="seq-next">Avanti</button></div>'
+  h+='</div><div class="wfoot">'+(ph==='ready'?'<button class="btn" data-act="seq-next">Salta questo</button><button class="btn primary" data-act="seq-go">'+IC.play+'Avvia</button>'
+    :ph==='prep'?'<button class="btn" data-act="seq-next">Salta questo</button><button class="btn primary" data-act="seq-now">Parti subito</button>'
+    :'<button class="btn" data-act="seq-pause">'+(A.paused?'Riprendi':'Pausa')+'</button><button class="btn primary" data-act="seq-next">Avanti</button>')+'</div>'
     +(A.kind!=='mobility'?'<button class="btn ghost block" data-act="seq-skip">'+(warm?'Salta il riscaldamento':'Salta il defaticamento')+'</button>':'');
   return h}
 function restView(A){const left=A.restEnd-Date.now();const it=A.items[A.nextI];const ex=exById(it.ex);const same=A.nextI===A.i;const c=it.cur||prefill(A,it);
@@ -1306,9 +1335,10 @@ function exView(A){const it=curItem(A);const ex=exById(it.ex);const c=it.cur||(i
   h+='<div class="exhead"><div class="tx"><div class="exname">'+esc(ex.n)+'</div><div class="setlbl" style="margin-top:6px"><b>Serie '+(n+1)+' di '+T.sets+'</b><span class="sdots">'+Array.from({length:T.sets},(_,k)=>'<i class="'+(k<n?'on':k===n?'cur':'')+'"></i>').join('')+'</span></div>'
     +'<div class="target">Obiettivo '+(T.rmin===T.rmax?T.rmin:T.rmin+'–'+T.rmax)+' '+esc(UNIT[ex.u])+(st.slow&&!isTime(ex)?' · <b>discesa lenta in 3 secondi</b>':'')+(A.reduced||A.deload?' · versione leggera':'')+'</div></div><button class="fig" data-act="wo-tech" aria-label="Come si fa" style="flex:none;background:var(--surface);border-radius:14px;box-shadow:var(--shadow);padding:4px">'+figOf(ex).replace('<svg','<svg style="width:84px;height:74px"')+'</button></div>';
   h+='<div class="cue"><b>Pensa a:</b> '+esc(ex.tips[n%ex.tips.length])+'</div>';
-  if(isTime(ex)){const run=A.workEnd&&A.workEnd>Date.now();
-    h+='<div class="stepper"><button data-act="st-r" data-v="-5" aria-label="Meno secondi">−</button><div class="val"><b class="num" data-cd>'+(run?fmtClock(A.workEnd-Date.now()):c.r)+'</b><span>'+(run?'tieni duro':'secondi'+(perSide(ex)?' per lato':''))+'</span></div><button data-act="st-r" data-v="5" aria-label="Più secondi">+</button></div>'
-      +(run?'':'<button class="btn block" data-act="work-go" style="min-height:52px">'+IC.play+'Avvia '+c.r+' secondi'+(perSide(ex)?' per lato':'')+'</button>');
+  if(isTime(ex)){const now=Date.now();const prep=A.workPrep>now;const run=!prep&&A.workEnd>now;const side=perSide(ex)?(A.side2?' · secondo lato':' · primo lato'):'';
+    h+='<div class="stepper"><button data-act="st-r" data-v="-5" aria-label="Meno secondi">−</button><div class="val"><b class="num" data-cd'+(prep?' style="color:var(--rest)"':'')+'>'+(prep?Math.max(1,Math.ceil((A.workPrep-now)/1000)):run?fmtClock(A.workEnd-now):c.r)+'</b><span>'
+      +(prep?(A.side2?'cambia lato':'mettiti in posizione')+side:run?'tieni duro'+side:'secondi'+(perSide(ex)?' per lato':''))+'</span></div><button data-act="st-r" data-v="5" aria-label="Più secondi">+</button></div>'
+      +(prep?'<button class="btn block" data-act="work-now" style="min-height:52px">Parti subito</button>':run?'':'<button class="btn block primary" data-act="work-go" style="min-height:56px">'+IC.play+'Avvia '+c.r+' secondi'+(perSide(ex)?' per lato':'')+'</button><p class="hint" style="text-align:center;margin-top:-6px">Prima hai 5 secondi per metterti in posizione.</p>');
   }else h+='<div class="stepper"><button data-act="st-r" data-v="-1" aria-label="Meno ripetizioni">−</button><div class="val"><b class="num">'+c.r+'</b><span>ripetizioni'+(perSide(ex)?' per lato':'')+'</span></div><button data-act="st-r" data-v="1" aria-label="Più ripetizioni">+</button></div>';
   if(loaded(ex))h+='<div class="stepper"><button data-act="st-w" data-v="-1" aria-label="Meno peso">−</button><div class="val"><b class="num" style="font-size:'+(ex.ld==='band'?'24px':'42px')+'">'+esc(ex.ld==='band'?fmtW(ex.ld,c.w):fmtN(c.w))+'</b><span>'+(ex.ld==='band'?'resistenza':ex.ld==='db'?'kg per mano':ex.ld==='pack'?'kg nello zaino':'kg')+'</span></div><button data-act="st-w" data-v="1" aria-label="Più peso">+</button></div>';
   h+='<p class="feelq">Fatta? Com\'è andata?</p><div class="feel"><button class="f1" data-act="feel" data-v="1">Facile<small>ne avevo ancora 3 o più</small></button><button class="f2" data-act="feel" data-v="2">Giusto<small>1 o 2 in riserva</small></button><button class="f3" data-act="feel" data-v="3">Durissimo<small>al limite</small></button></div>';
@@ -1342,9 +1372,16 @@ function woTick(){const A=D.active;
   const cd=document.querySelector('[data-cd]');
   if(A.phase==='rest'){const left=A.restEnd-now;if(left<=0){endRest(A,true);return}if(cd)cd.textContent=fmtClock(left);setRing(left/A.restTotal);
     if(left<=3200&&left>2800&&!A.pre){A.pre=1;beep(1)}if(left>3200)A.pre=0}
-  else if(A.phase==='warm'||A.phase==='cool'){if(A.paused)return;const x=seqList(A)[A.wi];if(!x)return;const left=A.wEnd-now;if(left<=0){seqNext(A,true);return}
+  else if(A.phase==='warm'||A.phase==='cool'){const x=seqList(A)[A.wi];if(!x)return;const ph=A.wPhase||'run';
+    if(ph==='ready')return;
+    if(ph==='prep'){const pl=A.prepEnd-now;if(pl<=0){beep(1,true);seqRun(A);return}pips(A,pl);if(cd)cd.textContent=String(Math.ceil(pl/1000));setRing(pl/PREP);return}
+    if(A.paused)return;const left=A.wEnd-now;if(left<=0){seqNext(A,true);return}
     if(cd)cd.textContent=fmtClock(left);setRing(left/(x.sec*1000));const ex=exById(x.ex);if(perSide(ex)&&!A.half&&left<=x.sec*500){A.half=true;beep(1,true);toast('Cambia lato')}}
-  else if(A.phase==='ex'&&A.workEnd){const left=A.workEnd-now;if(left<=0){A.workEnd=0;beep(2,true);const it=curItem(A);const ex=exById(it.ex);if(perSide(ex)&&!A.side2){A.side2=true;A.workEnd=Date.now()+it.cur.r*1000;toast('Altro lato');persist();renderWO();return}A.side2=false;persist();renderWO();toast('Tempo! Com\'è andata?');return}
+  else if(A.phase==='ex'&&A.workPrep){const pl=A.workPrep-now;if(pl<=0){A.workPrep=0;A.workEnd=now+curItem(A).cur.r*1000;beep(1,true);persist();renderWO();return}
+    pips(A,pl);if(cd)cd.textContent=String(Math.ceil(pl/1000))}
+  else if(A.phase==='ex'&&A.workEnd){const left=A.workEnd-now;if(left<=0){A.workEnd=0;beep(2,true);const it=curItem(A);const ex=exById(it.ex);
+      if(perSide(ex)&&!A.side2){A.side2=true;A.pip=0;A.workPrep=Date.now()+PREP;toast('Cambia lato: 5 secondi');persist();renderWO();return}
+      A.side2=false;persist();renderWO();toast('Tempo! Com\'è andata?');return}
     if(cd)cd.textContent=fmtClock(left)}}
 setInterval(woTick,250);
 
@@ -1608,12 +1645,16 @@ const ACT={
   'wo-discard'(b){if(!arm(b))return;D.active=null;persist();closeSheet();if(fullMode)closeFull();else render();toast('Allenamento scartato')},
   'seq-pause'(){const A=D.active;if(A.paused){A.paused=false;A.wEnd=Date.now()+A.wLeft}else{A.paused=true;A.wLeft=Math.max(0,A.wEnd-Date.now())}persist();renderWO()},
   'seq-next'(){unlockAudio();seqNext(D.active,false)},
+  'seq-go'(){const A=D.active;unlockAudio();A.wPhase='prep';A.pip=0;A.prepEnd=Date.now()+PREP;persist();renderWO()},
+  'seq-now'(){unlockAudio();seqRun(D.active)},
+  'test-sound'(){testSound()},
+  'work-now'(){const A=D.active;unlockAudio();A.workPrep=0;A.workEnd=Date.now()+curItem(A).cur.r*1000;persist();renderWO()},
   'seq-skip'(){const A=D.active;if(A.phase==='warm'){const n=nextIdx(A,0);if(n<0)toCool(A);else{enterEx(A,n);persist();renderWO()}}else finishWorkout()},
   'rest-add'(b){const A=D.active;A.restEnd=Math.max(Date.now()+1000,A.restEnd+(+b.dataset.v)*1000);A.restTotal=Math.max(A.restTotal,A.restEnd-Date.now());persist();renderWO()},
   'rest-skip'(){unlockAudio();endRest(D.active,false)},
   'st-r'(b){const A=D.active;const it=curItem(A);it.cur.r=Math.max(isTime(exById(it.ex))?5:1,it.cur.r+(+b.dataset.v));persist();renderWO()},
   'st-w'(b){const A=D.active;const it=curItem(A);const ex=exById(it.ex);const nw=stepW(ex.ld,it.cur.w,+b.dataset.v);if(nw===it.cur.w)toast(+b.dataset.v>0?'Non hai pesi più alti.':'È già il peso più leggero.');it.cur.w=nw;persist();renderWO()},
-  'work-go'(){const A=D.active;unlockAudio();A.workEnd=Date.now()+curItem(A).cur.r*1000;A.side2=false;persist();renderWO()},
+  'work-go'(){const A=D.active;unlockAudio();A.workEnd=0;A.pip=0;A.workPrep=Date.now()+PREP;A.side2=false;persist();renderWO()},
   feel(b){logSet(+b.dataset.v)},
   'wo-tech'(){openExInfo(curItem(D.active).ex,true)},
   'wo-skip'(){closeSheet();const A=D.active;const it=curItem(A);it.skipped=it.sets.length===0;if(!it.skipped)it.target.sets=it.sets.length;D.skips.push({date:todayKey(),ex:it.ex,why:'saltato'});
@@ -1727,6 +1768,7 @@ document.addEventListener('input',ev=>{const t=ev.target;
 document.addEventListener('change',ev=>{const t=ev.target;
   if(t.id==='restore-in'&&t.files&&t.files[0])onRestoreFile(t.files[0]);
   else if(t.id==='pex'){S.pex=t.value;render()}
+  else if(t.id==='loud-snd'){D.meta.loudSound=t.checked;persist();SND.ok=false;testSound()}
   else if(t.closest('#wz')&&t.dataset.re){wzCollect();renderWz(true)}
 });
 document.addEventListener('keydown',ev=>{if(ev.key==='Escape'&&!$('#backdrop').hidden)closeSheet()});
@@ -1743,7 +1785,8 @@ setInterval(()=>{if(todayKey()!==lastToday){lastToday=todayKey();rollBlock();if(
   S.tab=TABS.includes(h)?h:TABS.includes(saved)?saved:'oggi';
   rollBlock();persist();render();
   if(D.active){const A=D.active;if(A.phase==='checkin'){dayPains=arr(A.checkin.where)}else if(A.checkin&&A.checkin.where)dayPains=arr(A.checkin.where);
-    if((A.phase==='warm'||A.phase==='cool')&&!A.paused){const L=seqList(A);const x=L[A.wi];A.paused=true;A.wLeft=x?clamp(A.wEnd-Date.now(),5000,x.sec*1000):5000}
+    if(A.phase==='warm'||A.phase==='cool'){if(A.wPhase==='prep')seqReady(A);else if(A.wPhase!=='ready'&&!A.paused){const L=seqList(A);const x=L[A.wi];A.paused=true;A.wLeft=x?clamp(A.wEnd-Date.now(),5000,x.sec*1000):5000}}
+    if(A.phase==='ex'){A.workPrep=0;A.workEnd=0;A.side2=false}
     if(diffDays(A.date,todayKey())<=1){openFull('wo');renderWO()}}
   else if(!P().done)openSetup();
   let storageWorks=true;try{localStorage.setItem('al-test','1');localStorage.removeItem('al-test')}catch(e){storageWorks=false}
