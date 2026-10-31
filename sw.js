@@ -1,7 +1,7 @@
 // Fa funzionare l'app anche senza connessione: tiene una copia dei file
 // e la aggiorna in background quando c'è rete. I tuoi dati non passano da qui.
 // Per pubblicare un aggiornamento: cambia il numero qui sotto (allenamento-v2, v3…).
-const CACHE = 'allenamento-v2';
+const CACHE = 'allenamento-v3';
 const FILES = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
 
 self.addEventListener('install', e => {

@@ -576,6 +576,9 @@ const VOLG=['petto','schiena','spalle','bicipiti','tricipiti','core','glutei','q
 const PATS={spinta:'Spinta',tirata:'Tirata',squat:'Squat',stacco:'Stacco',affondo:'Affondo',core:'Core',cardio:'Cardio',mobilita:'Mobilità'};
 const PAINS=[['schiena','Schiena bassa'],['ginocchia','Ginocchia'],['spalle','Spalle'],['polsi','Polsi'],['collo','Collo'],['piedi','Piedi e caviglie'],['altro','Altro']];
 const PAINL=Object.fromEntries(PAINS);
+/* indolenzimento (muscoli doloranti dopo l'allenamento): diverso dal dolore, vale solo per oggi */
+const SORE=[['petto','Petto'],['spalle','Spalle'],['braccia','Braccia'],['schiena','Schiena'],['gambe','Gambe'],['glutei','Glutei'],['core','Addome']];
+const SOREMAP={braccia:['tricipiti','bicipiti'],gambe:['quadricipiti','femorali','polpacci']};
 const GOALS=[['forza','Forza','Diventare più forte nei movimenti base'],['massa','Massa muscolare','Più muscoli, fisico più pieno'],['dimagrimento','Dimagrimento e fiato','Meno pancia, più resistenza'],['mobilita','Mobilità e postura','Muoversi meglio, meno rigidità'],['salute','Salute generale','Un po\' di tutto, in equilibrio']];
 const GOALL=Object.fromEntries(GOALS.map(g=>[g[0],g[1]]));
 const LEVELS=[['principiante','Principiante','Inizio adesso o riparto dopo tanto'],['intermedio','Intermedio','Mi alleno con costanza da qualche mese'],['esperto','Esperto','Mi alleno da anni']];
@@ -818,19 +821,27 @@ function presc(ex,extra){const g=P().goal;const lv=P().level;const bw=!loaded(ex
   return {sets,rmin:R[0],rmax:R[1],rest:ex.p==='core'?Math.min(rest,60):rest}}
 function chooseEx(pat,mus,used,opt){const lv=P().level;const tD={principiante:2,intermedio:3,esperto:4}[lv];
   const wantLoad=['forza','massa'].includes(P().goal);const noia=P().struggles.includes('Noia');
-  let c=allEx().filter(e=>e.p===pat&&usable(e)&&(!mus||e.m.includes(mus)||(pat==='mobilita'&&arr(e.s).includes(mus))));
-  if(!c.length&&mus&&pat!=='mobilita')c=allEx().filter(e=>e.p===pat&&usable(e));
+  const ok=e=>!(opt&&opt.not&&opt.not.has(e.id))&&!(opt&&opt.fits&&!opt.fits(e));
+  let c=allEx().filter(e=>e.p===pat&&usable(e)&&(!mus||e.m.includes(mus)||(pat==='mobilita'&&arr(e.s).includes(mus)))&&ok(e));
+  if(!c.length&&mus&&pat!=='mobilita')c=allEx().filter(e=>e.p===pat&&usable(e)&&ok(e));
   if(pat==='squat'&&!mus)c=c.filter(e=>!e.m.includes('polpacci'));
-  if(opt&&opt.not)c=c.filter(e=>!opt.not.has(e.id));
   if(!c.length)return null;
   const sc=e=>-Math.abs(e.d-tD)*2-(e.d>tD+1?6:0)+(D.likes[e.id]===1?3:0)+(D.likes[e.id]===-1?-6:0)+(wantLoad&&loaded(e)?1.5:0)
     -(used.has(e.id)?(noia?3.5:2.5):0)+(opt&&opt.vary?Math.random()*3:0)+(e.custom?.5:0)+(e.p==='core'&&isTime(e)&&lv==='principiante'?.5:0);
   return c.map(e=>({e,s:sc(e)})).sort((a,b)=>b.s-a.s)[0].e}
+/* Lavoro per muscolo in una seduta, contato come nella meta-analisi di Pelland: serie dirette 1, indirette mezza.
+   Tricipiti e bicipiti, piccoli e già caricati da spinte e tirate, hanno un tetto più basso:
+   per chi riparte niente più flessioni + pike push-up + dip nella stessa seduta. */
+const MCAP={principiante:[6,3],intermedio:[9,5],esperto:[12,7]};
+const capFor=m=>MCAP[P().level][m==='tricipiti'||m==='bicipiti'?1:0];
+function loadAdd(load,ex,sets){ex.m.forEach(m=>{load[m]=(load[m]||0)+sets});arr(ex.s).forEach(m=>{load[m]=(load[m]||0)+sets/2})}
+function fitsLoad(load,ex,sets){const t={...load};loadAdd(t,ex,sets);
+  return ex.m.concat(arr(ex.s)).every(m=>m==='cardio'||m==='mobilita'||t[m]<=capFor(m)+1e-9)}
 function buildDay(tpl,used,opt){const min=P().minutes;const nMain={20:3,30:4,45:5,60:6}[min];
-  const slots=[];const inDay=new Set();
+  const slots=[];const inDay=new Set();const load={};
   for(const [pat,mus] of TPL[tpl]){if(slots.length>=nMain)break;
-    const ex=chooseEx(pat,mus,used,{...opt,not:inDay});if(!ex)continue;inDay.add(ex.id);used.add(ex.id);
-    slots.push({id:uid(),pat,mus:mus||null,ex:ex.id,...presc(ex)})}
+    const ex=chooseEx(pat,mus,used,{...opt,not:inDay,fits:e=>fitsLoad(load,e,presc(e).sets)});if(!ex)continue;inDay.add(ex.id);used.add(ex.id);
+    loadAdd(load,ex,presc(ex).sets);slots.push({id:uid(),pat,mus:mus||null,ex:ex.id,...presc(ex)})}
   /* il lavoro per i piedi doloranti è già nel riscaldamento */
   const G=allGoals();const extras=[];
   if(G.includes('mobilita'))extras.push(['mobilita',tpl==='lo'?'glutei':'spalle']);
@@ -939,6 +950,10 @@ function renderOggi(){
   let h='<div class="hero"><div class="dn"><span class="eyebrow">'+esc(longDate(ti.t))+'</span><h1>'+(ti.doneToday.length?'Fatto per oggi.':greet()+'.')+'</h1>'
     +'<div class="sub"><span class="pill acc">'+(stk?stk+(stk===1?' settimana attiva':' settimane attive di fila'):'Prima settimana attiva in arrivo')+'</span><span class="pill">'+(wc>=need?'Settimana attiva: '+wc+(wc===1?' allenamento':' allenamenti'):'Questa settimana '+wc+' di '+need)+'</span></div></div></div>';
   h+='<div class="grid"><div class="stack">';
+  if(D.meta.rulesNote)h+='<section class="card stack-s" style="border-left:6px solid var(--rest)"><span class="eyebrow" style="color:var(--rest)">Programma rifatto, più prudente</span>'
+    +'<p>Il programma di prima metteva troppi esercizi per i tricipiti nello stesso allenamento. L\'ho rifatto con le regole delle linee guida per chi riparte:</p>'
+    +'<ul style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:4px"><li>prime due settimane: 1 serie per esercizio, poi 2, poi 3;</li><li>tricipiti e bicipiti al massimo 3 serie per allenamento: mai più flessioni, pike e dip insieme;</li><li>fermati quando ne potresti fare ancora 2 o 3;</li><li>nel check-in puoi dire <b>Indolenziti</b>: quei muscoli quel giorno riposano.</li></ul>'
+    +'<p class="note">Gli allenamenti fatti e i pesi restano salvati. Se le braccia fanno ancora male, nel check-in scegli Indolenziti → Braccia.</p><div class="btnrow"><button class="btn small primary" data-act="rules-ok">Ho capito</button><button class="btn small" data-act="tab" data-tab="programma">Vedi il programma</button></div></section>';
   if(D.active){const A=D.active;
     h+='<section class="card today stack-s"><span class="eyebrow">Allenamento a metà</span><h2>'+esc(A.dayName)+'</h2><p class="muted">Iniziato '+esc(relDay(A.date).toLowerCase())+' alle '+esc(new Date(A.start).toTimeString().slice(0,5))+'. Riprendi da dove eri: è tutto salvato.</p>'
       +'<button class="startbtn resume" data-act="resume">'+IC.play+'Riprendi da dove eri</button><div class="btnrow"><button class="btn small" data-act="wo-finish-now">Chiudi e salva quello che ho fatto</button><button class="btn small danger" data-act="wo-discard">Scarta</button></div></section>';
@@ -989,7 +1004,7 @@ function insights(){const out=[];if(!D.plan)return out;const t=todayKey();const 
   const seen=new Set();let hardCnt=0;
   D.plan.days.forEach(d=>d.slots.forEach(sl=>{const ex=exById(sl.ex);if(!ex||seen.has(ex.id))return;seen.add(ex.id);const st=obj(D.prog[ex.id]);const rec=nextSessOf(ex.id);
     const done=rec.filter(i=>!i.skipped&&i.sets.length);const hardN=done.filter(i=>i.sets.filter(s=>s.feel===3).length>=2).length;
-    const painN=rec.filter(i=>i.pain).length;const easyN=done.filter(i=>i.sets.every(s=>s.feel===1)).length;const skipN=rec.filter(i=>i.skipped).length;
+    const painN=rec.filter(i=>i.pain).length;const easyN=done.filter(i=>i.sets.every(s=>s.feel===1)).length;const skipN=rec.filter(i=>i.skipped&&!i.sore).length;
     const A=(l,ex2)=>[l,'ins-swap',{slot:sl.id,ex:ex2}];
     if(st.ready&&exById(st.ready)&&usable(exById(st.ready)))out.push({id:'ready-'+sl.id,ic:IC.up,text:'<b>'+esc(ex.n)+'</b> ti riesce bene da un po\'. Puoi passare a <b>'+esc(exName(st.ready))+'</b>.',acts:[A('Passa alla versione difficile',st.ready)]});
     else if(hardN>=2||painN||(st.easier&&exById(st.easier))){const e=(st.easier&&exById(st.easier))||variant(ex,-1)||alternatives(ex)[0];
@@ -1023,7 +1038,9 @@ function renderPlan(){const v=$('#v-programma');const p=D.plan;
   if(!p){v.innerHTML='<h1 class="page-h">Programma</h1><div class="empty">Ancora nessun programma.<br><button class="btn primary" style="margin-top:10px" data-act="setup">Preparalo adesso</button></div>';return}
   const wi=weekIdx();const dl=isDeload();
   let h='<h1 class="page-h">Programma</h1><div class="grid"><div class="stack">';
-  h+='<section class="card stack-s"><p class="why">'+esc(p.why)+'</p><p class="note">'+(dl?'<b style="color:var(--rest)">Questa è una settimana di scarico:</b> meno serie e pesi più leggeri. Dalla prossima si riparte.':'Settimana '+wi+' di '+p.deloadEvery+'. Alla settimana '+p.deloadEvery+' c\'è lo scarico, prima se segni spesso fatica o dolori.')+'</p>'
+  h+='<section class="card stack-s"><p class="why">'+esc(p.why)+'</p>'
+    +(inRamp()?'<p class="note"><b style="color:var(--rest)">Rientro, settimana '+rampWeek()+' di '+rampLen()+':</b> '+(P().level==='principiante'?(rampWeek()===1?'1 serie':'2 serie'):'una serie in meno')+' per esercizio, poi si sale. Serve a non avere dolori forti i giorni dopo.</p>':'')
+    +'<p class="note">'+(dl?'<b style="color:var(--rest)">Questa è una settimana di scarico:</b> meno serie e pesi più leggeri. Dalla prossima si riparte.':'Settimana '+wi+' di '+p.deloadEvery+'. Alla settimana '+p.deloadEvery+' c\'è lo scarico, prima se segni spesso fatica o dolori.')+'</p>'
     +'<div class="btnrow">'+(dl?'':'<button class="btn small" data-act="deload-now">Scarico adesso</button>')+'<button class="btn small" data-act="plan-vary">Cambia un po\' gli esercizi</button><button class="btn small danger" data-act="plan-regen">Rigenera da zero</button></div></section>';
   const week=wkStart(todayKey());const pl=plannedFor(week);
   h+='<section class="card"><div class="sec-head"><h2>La settimana</h2><button class="btn small ghost" data-act="setup">Giorni e tempo</button></div>';
@@ -1035,7 +1052,8 @@ function renderPlan(){const v=$('#v-programma');const p=D.plan;
     h+='</div><div style="margin-top:8px"><button class="btn small ghost" data-act="slot-add" data-day="'+esc(d.id)+'">+ Aggiungi esercizio</button></div></div>'});
   h+='</section></div><div class="stack"><section class="card stack-s"><h2 style="font-size:18px">Come funziona la progressione</h2>'
     +'<p class="note">Ogni esercizio ha un intervallo di ripetizioni, per esempio 8–12. Quando fai tutte le serie al massimo, la volta dopo l\'app propone più peso, arrotondato ai pesi che hai davvero. Senza pesi più alti aumenta le ripetizioni, poi rallenta la discesa, poi propone la versione più difficile.</p>'
-    +'<p class="note">Se una serie è <b>durissima</b> due volte, la volta dopo l\'app alleggerisce o propone una versione più facile.</p></section>'
+    +'<p class="note">Se una serie è <b>durissima</b> due volte, la volta dopo l\'app alleggerisce o propone una versione più facile.</p>'
+    +'<p class="note"><b>Regole per chi riparte</b>, dalle linee guida dell\'American College of Sports Medicine (2009 e 2026): le prime due settimane 1 e poi 2 serie per esercizio; ogni muscolo al massimo 6 serie per allenamento e tricipiti e bicipiti al massimo 3, contando mezza serie quando un muscolo aiuta soltanto (per esempio i tricipiti nelle flessioni); non serve arrivare al limite. Dopo 3 settimane di pausa il rientro ricomincia.</p></section>'
     +'<section class="card stack-s"><h2 style="font-size:18px">I tuoi dati</h2><p class="note">'+esc(GOALL[P().goal])+' · '+esc(LEVELL[P().level]).toLowerCase()+' · '+P().days.length+' giorni da '+P().minutes+' minuti · '+esc(daysText(P().days))+'</p>'
     +(P().pains.length?'<p class="note">Esclusi gli esercizi sconsigliati per: '+esc(P().pains.map(x=>PAINL[x].toLowerCase()).join(', '))+'.</p>':'')+'<div class="btnrow"><button class="btn small" data-act="setup">Modifica</button></div></section></div></div>';
   v.innerHTML=h}
@@ -1216,13 +1234,14 @@ function prefill(A,it){const ex=exById(it.ex);if(!ex)return {w:0,r:it.target.rmi
   let w=st.w,r=Math.max(it.target.rmin,Math.min(st.r,it.target.rmax+(isTime(ex)?20:4)));
   if(loaded(ex)){if(A.deload)w=nearW(ex.ld,w*.8,true);else if(A.reduced)w=nearW(ex.ld,w*.9,true)}
   if(A.kind==='short')r=Math.min(r,it.target.rmax);
+  if(A.ramp)r=it.target.rmin;
   return {w,r}}
 function seq(ids){return ids.map(([id,sec])=>({ex:id,sec})).filter(x=>{const e=exById(x.ex);return e&&isSafe(e)})}
 function buildWarm(items){const pats=new Set(items.map(i=>(exById(i.ex)||{}).p));const up=pats.has('spinta')||pats.has('tirata');const lo=pats.has('squat')||pats.has('affondo')||pats.has('stacco');
   const L=[['march',45]];if(up)L.push(['armcirc',30],['wallangel',40]);if(lo)L.push(['hipcirc',30],['catcow',40]);if(curPains().includes('piedi'))L.push(['ankle',40],['shortfoot',30]);
   if(lo)L.push(['wgs',40]);if(!up&&!lo)L.push(['catcow',40],['armcirc',30]);
   const inMain=new Set(items.map(i=>i.ex));let s=seq(L).filter(x=>!inMain.has(x.ex));let tot=0;s=s.filter(x=>(tot+=x.sec)<=360);
-  if(tot<180)s=s.concat(seq([['knees-up',30],['hipcirc',30]]));return s}
+  if(tot<180)s=s.concat(seq([['knees-up',30],['hipcirc',30]]).filter(x=>!inMain.has(x.ex)&&!s.some(y=>y.ex===x.ex)));return s}
 function buildCool(items){const v={};items.forEach(i=>{const ex=exById(i.ex);if(!ex||i.skipped)return;ex.m.forEach(m=>{v[m]=(v[m]||0)+i.sets.length+1})});
   const map={petto:'chest-door',schiena:'child',quadricipiti:'hipflex',femorali:'hamstr',glutei:'fig4',polpacci:'calfstr',spalle:'towel-pass',tricipiti:'towel-pass',bicipiti:'chest-door',core:'child'};
   const ok=id=>{const e=exById(id);return e&&isSafe(e)};const ids=[];
@@ -1231,9 +1250,19 @@ function buildCool(items){const v={};items.forEach(i=>{const ex=exById(i.ex);if(
   return seq(ids.map(id=>[id,40]).concat([['breath',60]]))}
 function newActive(kind,day,o){o=o||{};return {id:uid(),kind,dayId:day?day.id:'',dayName:o.name||(day?day.name:'Allenamento'),date:todayKey(),start:Date.now(),reduced:false,deload:kind==='full'&&isDeload(),extra:!!o.extra,
   phase:kind==='full'?'checkin':'warm',checkin:{},warm:[],wi:0,wEnd:0,wLeft:0,paused:false,cool:[],items:[],i:0,s:0,restEnd:0,restTotal:0,workEnd:0,hard:[],sessId:''}}
+/* Rientro graduale: chi riparte fa 1 serie per esercizio la prima settimana e 2 la seconda
+   (ACSM: per chi inizia una serie dà risultati simili a più serie; un primo carico basso riduce l'indolenzimento successivo).
+   Il rientro ricomincia anche dopo 3 settimane senza allenamenti. */
+const rampLen=()=>P().level==='principiante'?2:1;
+function rampWeek(){const t=todayKey();const ds=D.sessions.filter(s=>s.kind==='full'||s.kind==='short').map(s=>s.date).sort();if(!ds.length)return 1;
+  if(diffDays(ds[ds.length-1],t)>=21)return 1;let start=ds[0];for(let i=1;i<ds.length;i++)if(diffDays(ds[i-1],ds[i])>=21)start=ds[i];
+  return Math.floor(diffDays(start,t)/7)+1}
+const inRamp=()=>rampWeek()<=rampLen();
+function rampSets(full){const w=rampWeek();if(P().level==='principiante')return w===1?1:Math.min(full,2);return Math.max(1,full-1)}
 function startWorkout(dayId,extra){if(D.active){resumeWorkout();return}const day=D.plan&&D.plan.days.find(d=>d.id===dayId);if(!day)return;
-  unlockAudio();dayPains=[];const A=newActive('full',day,{extra});
-  A.items=day.slots.map(s=>{const ex=exById(s.ex);return ex?itemFor(ex,s,{cut:A.deload,light:A.deload}):null}).filter(Boolean);
+  unlockAudio();dayPains=[];const A=newActive('full',day,{extra});A.ramp=inRamp()?rampWeek():0;
+  A.items=day.slots.map(s=>{const ex=exById(s.ex);if(!ex)return null;const it=itemFor(ex,s,{cut:A.deload&&!A.ramp,light:A.deload||A.ramp===1});
+    if(A.ramp)it.target.sets=Math.min(it.target.sets,rampSets(s.sets));return it}).filter(Boolean);
   D.active=A;persist();openFull('wo');requestWake();renderWO()}
 function startShort(){if(D.active){resumeWorkout();return}unlockAudio();dayPains=[];const ti=todayInfo();const src=(ti.today||ti.missed[0]||ti.next||ti.nextWeek||{}).day;
   const A=newActive('short',ti.today?ti.today.day:null,{name:'10 minuti'});const pats=new Set();const items=[];
@@ -1269,8 +1298,13 @@ function pips(A,left){const s=Math.ceil(left/1000);if(s>=1&&s<=3&&A.pip!==s){A.p
 function beginFromCheckin(A){
   const pains=curPains();A.items.forEach(it=>{const ex=exById(it.ex);if(!ex||usable(ex,pains))return;const alt=alternatives(ex,pains,1)[0];
     if(alt){it.swappedFrom=it.ex;it.ex=alt.id;it.cur=null;toast(ex.n+' → '+alt.n+', per il dolore di oggi')}else it.skipped=true});
-  if(A.reduced)A.items.forEach(it=>{it.target.sets=Math.max(1,it.target.sets-(A.deload?0:1));it.light=true});
-  A.warm=buildWarm(A.items);A.wi=0;A.phase='warm';seqReady(A);
+  /* muscoli indolenziti: oggi riposano, anche dove lavorano solo in aiuto (i tricipiti nelle flessioni lavorano tanto) */
+  const soreM=arr(A.checkin.sore).flatMap(g=>SOREMAP[g]||[g]);
+  if(soreM.length){const off=[];A.items.forEach(it=>{const ex=exById(it.ex);if(!ex||it.skipped)return;
+      if(ex.m.concat(arr(ex.s)).some(m=>soreM.includes(m))){it.skipped=true;it.sore=true;off.push(ex.n)}});
+    if(off.length)toast('Oggi riposano i muscoli indolenziti: salto '+off.length+(off.length===1?' esercizio':' esercizi'))}
+  if(A.reduced)A.items.forEach(it=>{it.target.sets=Math.max(1,it.target.sets-(A.deload||A.ramp?0:1));it.light=true});
+  A.warm=buildWarm(A.items.filter(i=>!i.skipped));A.wi=0;A.phase='warm';seqReady(A);
   if(!A.warm.length){const n=nextIdx(A,0);if(n>=0)enterEx(A,n);else toCool(A)}persist();renderWO()}
 function logSet(feel){const A=D.active;const it=curItem(A);const ex=exById(it.ex);const c=it.cur;
   it.sets.push({w:loaded(ex)?c.w:0,r:c.r,feel,t:Date.now()});unlockAudio();A.workEnd=0;A.workPrep=0;A.side2=false;
@@ -1284,7 +1318,7 @@ function finishWorkout(early){const A=D.active;if(!A)return;const t=todayKey();
       if(prev>0&&now>prev+1e-9)prs.push({ex:ex.id,txt:loaded(ex)?'massimale stimato '+fmtN(Math.round(now*10)/10)+' kg':(isTime(ex)?now+' secondi':now+' ripetizioni')+' in una serie'})}
     const m=updateProg(it);if(m)msgs.push({ex:ex.id,txt:m})});
   const s=normSession({id:A.id,date:A.date||t,start:A.start,end:Date.now(),kind:A.kind,dayId:A.dayId,dayName:A.dayName,reduced:A.reduced,deload:A.deload,checkin:A.checkin,
-    items:A.items.map(it=>({ex:it.ex,name:exName(it.ex),slotId:it.slotId,target:it.target,sets:it.sets,skipped:it.skipped||(!it.sets.length&&A.kind!=='mobility'),note:it.note,pain:it.pain,swappedFrom:it.swappedFrom})),
+    items:A.items.map(it=>({ex:it.ex,name:exName(it.ex),slotId:it.slotId,target:it.target,sets:it.sets,skipped:it.skipped||(!it.sets.length&&A.kind!=='mobility'),sore:!!it.sore,note:it.note,pain:it.pain,swappedFrom:it.swappedFrom})),
     hard:[],prs,vol:Math.round(vol),reps,planned,done,what:A.kind==='mobility'?A.warm.map(w=>exName(w.ex)).join(', '):''});
   s.msgs=msgs;D.sessions.push(s);D.active=null;persist();
   S.sumId=s.id;releaseWake();openFull('sum');renderSummary();if(prs.length)confetti()}
@@ -1300,8 +1334,9 @@ function renderWO(){const A=D.active;const box=$('#full-in');if(!A){closeFull();
   box.innerHTML=exView(A)}
 function checkinView(A){const c=A.checkin;const q=(k,label,opts)=>'<div class="qgroup"><span class="q">'+label+'</span><div class="big3">'+opts.map((o,i)=>'<button data-act="ci" data-k="'+k+'" data-v="'+(i+1)+'" aria-pressed="'+(c[k]===i+1)+'">'+o+'</button>').join('')+'</div></div>';
   let h='<div class="wtop"><button class="iconbtn" data-act="wo-cancel" aria-label="Annulla">'+IC.x+'</button><div class="mid">'+esc(A.dayName)+'</div><span style="width:44px"></span></div><div class="wbody">';
-  h+='<div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><span class="phase">Prima di iniziare · 3 tocchi</span><button class="btn small ghost" data-act="test-sound">Prova il suono</button></div>'+q('sleep','Come hai dormito?',['Male','Così così','Bene'])+q('energy','Energia adesso?',['Bassa','Media','Alta'])+q('pain','Dolori oggi?',['No','Un po\'','Sì']);
-  if(c.pain>=2)h+='<div class="qgroup"><span class="hint" style="font-size:15px">Dove? Per oggi tolgo gli esercizi che lo caricano.</span><div class="chips">'+PAINS.map(([k,l])=>'<button class="chip" data-act="ci-where" data-v="'+k+'" aria-pressed="'+arr(c.where).includes(k)+'">'+l+'</button>').join('')+'</div></div>';
+  h+='<div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><span class="phase">Prima di iniziare · 3 tocchi</span><button class="btn small ghost" data-act="test-sound">Prova il suono</button></div>'+q('sleep','Come hai dormito?',['Male','Così così','Bene'])+q('energy','Energia adesso?',['Bassa','Media','Alta'])+q('pain','Come stanno i muscoli?',['Bene','Indolenziti','Dolore']);
+  if(c.pain===2)h+='<div class="qgroup"><span class="hint" style="font-size:15px">Quali? Oggi li lascio riposare. L\'indolenzimento dopo i primi allenamenti è normale e passa in qualche giorno.</span><div class="chips">'+SORE.map(([k,l])=>'<button class="chip" data-act="ci-sore" data-v="'+k+'" aria-pressed="'+arr(c.sore).includes(k)+'">'+l+'</button>').join('')+'</div></div>';
+  if(c.pain===3)h+='<div class="qgroup"><span class="hint" style="font-size:15px">Dolore vero: fitto, in un punto o alle articolazioni. Dove? Per oggi tolgo gli esercizi che lo caricano.</span><div class="chips">'+PAINS.map(([k,l])=>'<button class="chip" data-act="ci-where" data-v="'+k+'" aria-pressed="'+arr(c.where).includes(k)+'">'+l+'</button>').join('')+'</div></div>';
   const ok=c.sleep&&c.energy&&c.pain;const low=c.energy===1||(c.sleep===1&&c.energy===2);
   h+='</div>';
   if(ok&&low&&!A.deload)h+='<div class="nextbox stack-s"><b>Oggi versione leggera?</b><p class="muted">Una serie in meno e pesi un po\' più leggeri. Conta come allenamento fatto, e la progressione non si perde.</p><div class="wfoot"><button class="btn" data-act="ci-go" data-light="0">No, normale</button><button class="btn primary" data-act="ci-go" data-light="1">Sì, leggera</button></div></div>';
@@ -1333,7 +1368,8 @@ function exView(A){const it=curItem(A);const ex=exById(it.ex);const c=it.cur||(i
   const nEx=A.items.filter(i=>!i.skipped).length;const pos=A.items.slice(0,A.i+1).filter(i=>!i.skipped).length;
   let h=woTop(A,'Esercizio '+pos+' di '+nEx,progressPct(A))+'<div class="wbody" style="justify-content:flex-start">';
   h+='<div class="exhead"><div class="tx"><div class="exname">'+esc(ex.n)+'</div><div class="setlbl" style="margin-top:6px"><b>Serie '+(n+1)+' di '+T.sets+'</b><span class="sdots">'+Array.from({length:T.sets},(_,k)=>'<i class="'+(k<n?'on':k===n?'cur':'')+'"></i>').join('')+'</span></div>'
-    +'<div class="target">Obiettivo '+(T.rmin===T.rmax?T.rmin:T.rmin+'–'+T.rmax)+' '+esc(UNIT[ex.u])+(st.slow&&!isTime(ex)?' · <b>discesa lenta in 3 secondi</b>':'')+(A.reduced||A.deload?' · versione leggera':'')+'</div></div><button class="fig" data-act="wo-tech" aria-label="Come si fa" style="flex:none;background:var(--surface);border-radius:14px;box-shadow:var(--shadow);padding:4px">'+figOf(ex).replace('<svg','<svg style="width:84px;height:74px"')+'</button></div>';
+    +'<div class="target">Obiettivo '+(T.rmin===T.rmax?T.rmin:T.rmin+'–'+T.rmax)+' '+esc(UNIT[ex.u])+(st.slow&&!isTime(ex)?' · <b>discesa lenta in 3 secondi</b>':'')+(A.reduced||A.deload?' · versione leggera':'')+'</div>'
+    +(A.ramp?'<div class="target" style="color:var(--rest);font-weight:700">Settimana di rientro: fermati quando ne potresti fare ancora 2 o 3.</div>':'')+'</div><button class="fig" data-act="wo-tech" aria-label="Come si fa" style="flex:none;background:var(--surface);border-radius:14px;box-shadow:var(--shadow);padding:4px">'+figOf(ex).replace('<svg','<svg style="width:84px;height:74px"')+'</button></div>';
   h+='<div class="cue"><b>Pensa a:</b> '+esc(ex.tips[n%ex.tips.length])+'</div>';
   if(isTime(ex)){const now=Date.now();const prep=A.workPrep>now;const run=!prep&&A.workEnd>now;const side=perSide(ex)?(A.side2?' · secondo lato':' · primo lato'):'';
     h+='<div class="stepper"><button data-act="st-r" data-v="-5" aria-label="Meno secondi">−</button><div class="val"><b class="num" data-cd'+(prep?' style="color:var(--rest)"':'')+'>'+(prep?Math.max(1,Math.ceil((A.workPrep-now)/1000)):run?fmtClock(A.workEnd-now):c.r)+'</b><span>'
@@ -1515,7 +1551,7 @@ function renderWz(keep){const W=S.wz;const p=W.p;const st=W.step;const N=7;
     +'<div class="l"><b>Anche, se capita:</b><div class="chipset" style="margin-top:6px">'+GOALS.filter(g=>g[0]!==p.goal).map(g=>cb('goals2',g[0],p.goals2.includes(g[0]),g[1])).join('')+'</div></div>'
     +(W.first?'<button type="button" class="btn ghost" data-act="restore" style="align-self:flex-start">Hai già un backup? Ripristinalo</button>':'')}
   if(st===1)h+='<h1>Il tuo livello</h1><p class="muted">Se non ti alleni da tanto, scegli principiante anche se conosci gli esercizi: si sale in fretta.</p><div class="choices">'+LEVELS.map(g=>'<button type="button" class="choice wide" data-act="wz-level" data-v="'+g[0]+'" aria-pressed="'+(p.level===g[0])+'"><b>'+g[1]+'</b><span>'+g[2]+'</span></button>').join('')+'</div>';
-  if(st===2)h+='<h1>Quando e quanto?</h1><div class="l"><b>In quali giorni, di solito?</b><div class="days" style="margin-top:6px">'+DSH.map((l,i)=>'<label><input type="checkbox" name="days" value="'+i+'"'+(p.days.includes(i)?' checked':'')+' aria-label="'+DLONG[i]+'"><span>'+l+'</span></label>').join('')+'</div><span class="hint" style="margin-top:6px">Puoi spostare un allenamento quando vuoi. Anche due giorni di fila vanno bene.</span></div>'
+  if(st===2)h+='<h1>Quando e quanto?</h1><div class="l"><b>In quali giorni, di solito?</b><div class="days" style="margin-top:6px">'+DSH.map((l,i)=>'<label><input type="checkbox" name="days" value="'+i+'"'+(p.days.includes(i)?' checked':'')+' aria-label="'+DLONG[i]+'"><span>'+l+'</span></label>').join('')+'</div><span class="hint" style="margin-top:6px">Per chi riparte le linee guida consigliano 2–3 giorni a settimana. Puoi spostare un allenamento quando vuoi.</span></div>'
     +'<div class="l"><b>Quanto tempo per allenamento?</b><div class="choices" style="grid-template-columns:repeat(4,1fr);margin-top:6px">'+MINUTES.map(m=>'<button type="button" class="choice" style="min-height:56px;align-items:center" data-act="wz-min" data-v="'+m+'" aria-pressed="'+(p.minutes===m)+'"><b>'+m+'</b><span>min</span></button>').join('')+'</div><span class="hint" style="margin-top:6px">Meglio partire corti e finire sempre: dopo qualche settimana si allunga.</span></div>'
     +'<label class="l"><b>A che ora, di solito?</b><span class="hint">Serve solo per i promemoria nel calendario.</span><input class="field sm" type="time" name="time" value="'+esc(p.time)+'"></label>';
   if(st===3){const e=p.eq;const box=(k,label,on,det)=>'<div class="eqbox"><label class="checkline"><input type="checkbox" name="eq_'+k+'" data-re="1"'+(on?' checked':'')+'><span>'+label+'</span></label>'+(on&&det?'<div class="det">'+det+'</div>':'')+'</div>';
@@ -1635,7 +1671,9 @@ const ACT={
   dayinfo(b){openDayInfo(b.dataset.k)},
   'sess-del'(b){if(!arm(b))return;D.sessions=D.sessions.filter(s=>s.id!==b.dataset.id);persist();closeSheet();render();toast('Allenamento eliminato')},
   /* allenamento */
-  ci(b){const A=D.active;A.checkin[b.dataset.k]=+b.dataset.v;if(b.dataset.k==='pain'&&+b.dataset.v===1){A.checkin.where=[];dayPains=[]}persist();renderWO()},
+  ci(b){const A=D.active;const v=+b.dataset.v;A.checkin[b.dataset.k]=v;if(b.dataset.k==='pain'){if(v!==3){A.checkin.where=[];dayPains=[]}if(v!==2)A.checkin.sore=[]}persist();renderWO()},
+  'ci-sore'(b){const A=D.active;const w=arr(A.checkin.sore);const v=b.dataset.v;A.checkin.sore=w.includes(v)?w.filter(x=>x!==v):w.concat(v);persist();renderWO()},
+  'rules-ok'(){delete D.meta.rulesNote;persist();render()},
   'ci-where'(b){const A=D.active;const w=arr(A.checkin.where);const v=b.dataset.v;A.checkin.where=w.includes(v)?w.filter(x=>x!==v):w.concat(v);dayPains=A.checkin.where.filter(x=>x!=='altro');persist();renderWO()},
   'ci-go'(b){const A=D.active;unlockAudio();A.reduced=b.dataset.light==='1';beginFromCheckin(A)},
   'wo-cancel'(){D.active=null;persist();closeFull()},
@@ -1783,6 +1821,10 @@ setInterval(()=>{if(todayKey()!==lastToday){lastToday=todayKey();rollBlock();if(
 (function boot(){
   const h=(location.hash||'').slice(1);let saved=null;try{saved=localStorage.getItem('al-tab')}catch(e){}
   S.tab=TABS.includes(h)?h:TABS.includes(saved)?saved:'oggi';
+  /* regole v2 (tetto di serie per muscolo): rifà il programma salvato una volta sola, tenendo giorni e allenamenti già fatti */
+  if(D.plan&&(+D.meta.rules||1)<2){const old=D.plan;const np=genPlan();
+    if(np.days.length===old.days.length)np.days.forEach((d,i)=>{d.id=old.days[i].id;d.wd=old.days[i].wd});np.moves=old.moves;D.plan=np;D.meta.rulesNote=1}
+  D.meta.rules=2;
   rollBlock();persist();render();
   if(D.active){const A=D.active;if(A.phase==='checkin'){dayPains=arr(A.checkin.where)}else if(A.checkin&&A.checkin.where)dayPains=arr(A.checkin.where);
     if(A.phase==='warm'||A.phase==='cool'){if(A.wPhase==='prep')seqReady(A);else if(A.wPhase!=='ready'&&!A.paused){const L=seqList(A);const x=L[A.wi];A.paused=true;A.wLeft=x?clamp(A.wEnd-Date.now(),5000,x.sec*1000):5000}}
